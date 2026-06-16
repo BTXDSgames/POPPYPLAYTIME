@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Poppy Playtime 3D: Chapter 1 Clón</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        
+        /* Interfaz de usuario de terror */
+        #ui-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 10; display: flex; flex-direction: column; justify-content: space-between;
+        }
+        #top-bar {
+            padding: 25px; display: flex; justify-content: space-between;
+            color: #ef4444; font-size: 22px; font-weight: bold; font-family: monospace;
+            text-shadow: 0 0 8px rgba(239,68,68,0.6);
+        }
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; width: 10px; height: 10px;
+            background: rgba(255,255,255,0.5); border-radius: 50%; transform: translate(-50%, -50%);
+        }
+        #instructions {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(5, 5, 10, 0.9); padding: 30px; border-radius: 12px;
+            color: white; text-align: center; border: 2px solid #b91c1c;
+            box-shadow: 0 0 30px rgba(185,28,28,0.4);
+        }
+        .highlight { color: #38bdf8; font-weight: bold; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="top-bar">
+            <div>PLAYTIME CO. - DETECTOR DE INTRUSOS</div>
+            <div>BATERÍAS: <span id="score">0 / 3</span></div>
+        </div>
+        <div id="crosshair"></div>
+        <div id="instructions">
+            <h2 style="color: #ef4444; margin-top: 0;">PLAYTIME CO. - CHAPTER 1</h2>
+            <p style="font-size: 18px;">Haz <span style="color: #facc15; text-decoration: underline;">CLIC AQUÍ</span> para mirar en 3D</p>
+            <hr style="border-color: #334155; margin: 15px 0;">
+            <p>Caminar: <span class="highlight">W, A, S, D</span></p>
+            <p>Disparar GrabPack (Mano): <span class="highlight">Clic Izquierdo</span></p>
+            <p>Salir del juego: <span class="highlight">ESC</span></p>
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        // --- 1. CONFIGURACIÓN DEL MOTOR DE TERROR 3D ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x020205); // Oscuridad casi total
+        scene.fog = new THREE.FogExp2(0x020205, 0.04); // Niebla densa para dar miedo
+
+        const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        // --- 2. ILUMINACIÓN: LINTERNA EN PRIMERA PERSONA ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.03); // Luz ambiental mínima
+        scene.add(ambientLight);
+
+        // La linterna que se mueve con tus ojos
+        const flashlight = new THREE.SpotLight(0xfffaed, 1.5, 40, Math.PI / 5, 0.5, 1);
+        flashlight.castShadow = true;
+        flashlight.shadow.mapSize.width = 1024;
+        flashlight.shadow.mapSize.height = 1024;
+        scene.add(flashlight);
+        
+        // Objetivo de la linterna (hacia dónde apunta)
+        const flashlightTarget = new THREE.Object3D();
+        scene.add(flashlightTarget);
+        flashlight.target = flashlightTarget;
+
+        // --- 3. JUGADOR Y CONTROLES EN 1ª PERSONA (MOUSE LOCK) ---
+        let player = {
+            position: new THREE.Vector3(0, 2, 15),
+            velocity: new THREE.Vector3(),
+            speed: 0.1,
+            rotation: { yaw: 0, pitch: 0 }
+        };
+        camera.position.copy(player.position);
+
+        const instructions = document.getElementById('instructions');
+        window.addEventListener('click', () => { renderer.domElement.requestPointerLock(); });
+
+        document.addEventListener('pointerlockchange', () => {
+            instructions.style.display = (document.pointerLockElement === renderer.domElement) ? 'none' : 'block';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement !== renderer.domElement) return;
+            player.rotation.yaw -= e.movementX * 0.0025;
+            player.rotation.pitch -= e.movementY * 0.0025;
+            // Evitar dar la vuelta vertical completa
+            player.rotation.pitch = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, player.rotation.pitch));
+        });
+
+        // --- 4. MECÁNICA DEL GRABPACK (MANO EXTENSIBLE 3D) ---
+        const handGroup = new THREE.Group();
+        scene.add(handGroup);
+
+        const handMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.2 }); // Azul Grabpack
+        const armMat = new THREE.MeshBasicMaterial({ color: 0x2563eb }); // Cable azul eléctrico
+
+        const handMesh = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), handMat);
+        const armMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1), armMat);
+        armMesh.rotation.x = Math.PI / 2; // Orientarlo de frente
+
+        handGroup.add(handMesh);
+        handGroup.add(armMesh);
+        handGroup.visible = false;
+
+        let grabpack = {
+            active: false, mode: 'IDLE', timer: 0, maxDist: 15, currentDist: 0,
+            origin: new THREE.Vector3(), direction: new THREE.Vector3()
+        };
+
+        window.addEventListener('mousedown', () => {
+            if (grabpack.mode !== 'IDLE' || document.pointerLockElement !== renderer.domElement) return;
+            
+            grabpack.active = true;
+            grabpack.mode = 'SHOOT';
+            grabpack.timer = 0;
+            grabpack.currentDist = 0;
+            
+            // Origen desde la posición del jugador
+            grabpack.origin.copy(player.position).clone();
+            grabpack.origin.y -= 0.4; // Un poco más abajo de los ojos
+            
+            // Dirección hacia donde mira la cámara
+            camera.getWorldDirection(grabpack.direction);
+            handGroup.visible = true;
+        });
+
+        // --- 5. ENTORNO: PASILLOS DE LA FÁBRICA ---
+        let walls = [];
+        const wallMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8 });
+        const floorMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.9 });
+
+        function createWall(x, z, w, d, h=6) {
+            const geo = new THREE.BoxGeometry(w, h, d);
+            const mesh = new THREE.Mesh(geo, wallMat);
+            mesh.position.set(x, h/2, z);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            scene.add(mesh);
+            walls.push({ minX: x-w/2, maxX: x+w/2, minZ: z-d/2, maxZ: z+d/2 });
+        }
+
+        // Suelo gigante
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        // Construcción del laberinto de pasillos
+        createWall(0, -10, 40, 2);   // Pared Fondo
+        createWall(-20, 5, 2, 30);   // Pared Izquierda
+        createWall(20, 5, 2, 30);    // Pared Derecha
+        createWall(0, 20, 40, 2);    // Pared Atrás
+        createWall(-6, 5, 2, 16);    // Muros divisorios internos
+        createWall(8, -2, 12, 2);
+
+        // --- 6. OBJETOS COLECTABLES (BATERÍAS NEÓN) ---
+        let batteries = [];
+        let score = 0;
+        const batColors = [0xef4444, 0x22c55e, 0x38bdf8];
+
+        function createBattery(x, z, color) {
+            const geo = new THREE.BoxGeometry(0.4, 0.6, 0.4);
+            const mat = new THREE.MeshBasicMaterial({ color: color }); // Neón brillante autónomo
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(x, 0.6, z);
+            scene.add(mesh);
+            batteries.push(mesh);
+        }
+
+        createBattery(-14, -5, batColors[0]);
+        createBattery(15, 12, batColors[1]);
+        createBattery(2, -6, batColors[2]);
+
+        // --- 7. MONSTRUO 3D (HUGGY WUGGY) ---
+        const huggyGroup = new THREE.Group();
+        scene.add(huggyGroup);
+
+        const blueFur = new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.7 });
+        const faceMat = new THREE.MeshStandardMaterial({ color: 0xef4444 });
+
+        // Cuerpo alargado estilo Huggy
+        const torso = new THREE.Mesh(new THREE.BoxGeometry(1, 2.5, 0.6), blueFur);
+        torso.position.y = 2.5;
+        huggyGroup.add(torso);
+
+        // Cabeza gigante con boca de terror
+        const head = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.2, 0.8), blueFur);
+        head.position.y = 4.2;
+        huggyGroup.add(head);
+
+        const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.3, 0.1), faceMat);
+        mouth.position.set(0, 3.9, 0.4);
+        huggyGroup.add(mouth);
+
+        huggyGroup.position.set(-10, 0, -5); // Posición inicial de acecho
+
+        // --- 8. CONTROLES DE TECLADO ---
+        const keys = {};
+        window.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; });
+        window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+        // --- 9. BUCLE DE ACTUALIZACIÓN (LOOP) ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (document.pointerLockElement === renderer.domElement) {
+                // --- MOVIMIENTO DE CÁMARA ---
+                // Aplicar rotaciones de mouse a la cámara
+                const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+                euler.x = player.rotation.pitch;
+                euler.y = player.rotation.yaw;
+                camera.quaternion.setFromEuler(euler);
+
+                // Mover linterna junto con la cámara
+                flashlight.position.copy(player.position);
+                const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+                flashlightTarget.position.copy(player.position).add(dir);
+
+                // --- MOVIMIENTO DE JUGADOR ---
+                let moveForward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.yaw).normalize();
+                let moveRight = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), player.rotation.yaw).normalize();
+                
+                let oldPos = player.position.clone();
+
+                if (keys['w']) player.position.addScaledVector(moveForward, player.speed);
+                if (keys['s']) player.position.addScaledVector(moveForward, -player.speed);
+                if (keys['a']) player.position.addScaledVector(moveRight, -player.speed);
+                if (keys['d']) player.position.addScaledVector(moveRight, player.speed);
+
+                // Colisiones físicas contra paredes de la fábrica
+                walls.forEach(w => {
+                    if (player.position.x > w.minX - 0.5 && player.position.x < w.maxX + 0.5 &&
+                        player.position.z > w.minZ - 0.5 && player.position.z < w.maxZ + 0.5) {
+                        player.position.copy(oldPos); // Te regresa si atraviesas un muro
+                    }
+                });
+
+                camera.position.copy(player.position);
+
+                // --- LÓGICA GRABPACK 3D ---
+                if (grabpack.active) {
+                    if (grabpack.mode === 'SHOOT') {
+                        grabpack.currentDist += 0.5;
+                        let curHandPos = grabpack.origin.clone().addScaledVector(grabpack.direction, grabpack.currentDist);
+                        handGroup.position.copy(curHandPos);
+                        
+                        // Ajustar longitud y escala del tubo del cable
+                        armMesh.scale.set(1, 1, grabpack.currentDist);
+                        armMesh.position.copy(grabpack.origin).add(curHandPos).multiplyScalar(0.5);
+                        armMesh.lookAt(curHandPos);
+
+                        // Comprobar si la mano atrapa una batería
+                        batteries.forEach((bat, index) => {
+                            if (curHandPos.distanceTo(bat.position) < 1.2) {
+                                scene.remove(bat);
+                                batteries.splice(index, 1);
+                                score++;
+                                document.getElementById('score').innerText = `${score} / 3`;
+                                grabpack.mode = 'RETRACT';
+                                if(score === 3) {
+                                    alert("🎉 ¡CONSEGUISTE TODAS LAS BATERÍAS! Has completado el Chapter 1.");
+                                    location.reload();
+                                }
+                            }
+                        });
+
+                        if (grabpack.currentDist >= grabpack.maxDist) grabpack.mode = 'RETRACT';
+
+                    } else if (grabpack.mode === 'RETRACT') {
+                        grabpack.currentDist -= 0.6;
+                        if (grabpack.currentDist <= 0) {
+                            grabpack.mode = 'IDLE';
+                            grabpack.active = false;
+                            handGroup.visible = false;
+                        } else {
+                            let curHandPos = grabpack.origin.clone().addScaledVector(grabpack.direction, grabpack.currentDist);
+                            handGroup.position.copy(curHandPos);
+                            armMesh.scale.set(1, 1, grabpack.currentDist);
+                            armMesh.position.copy(grabpack.origin).add(curHandPos).multiplyScalar(0.5);
+                            armMesh.lookAt(curHandPos);
+                        }
+                    }
+                }
+
+                // --- INTELIGENCIA DE ACECHO DE HUGGY WUGGY ---
+                let distToHuggy = player.position.distanceTo(huggyGroup.position);
+                
+                // Si estás a menos de 18 metros, Huggy empieza a avanzar directo hacia ti mirándote fijamente
+                if (distToHuggy < 18) {
+                    huggyGroup.lookAt(player.position.x, huggyGroup.position.y, player.position.z);
+                    let targetDir = new THREE.Vector3().subVectors(player.position, huggyGroup.position).normalize();
+                    // Avanza lentamente para dar suspenso
+                    huggyGroup.position.addScaledVector(targetDir, 0.035);
+                }
+
+                // JUMPSCARE SI TE TOCA
+                if (distToHuggy < 1.6) {
+                    alert("👹 ¡JUMPSCARE! Huggy Wuggy te atrapó en la oscuridad.");
+                    location.reload();
+                }
+
+                // Efecto de rotación mística en las baterías
+                batteries.forEach(b => b.rotation.y += 0.04);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
+</html>
